@@ -3,6 +3,8 @@ import socket
 import threading
 import gnupg
 import defines
+import select
+import sys
 
 # 设置GPG密钥路径
 gpg_home = os.path.expanduser(os.environ.get('GNUPGHOME', '~/.gnupg'))
@@ -32,8 +34,11 @@ if gpg_private_key_path and os.path.exists(gpg_private_key_path):
 
 # 节点信息
 node_port = int(input("请输入节点端口:"))
-# input("按回车继续")
-known_nodes = []  # 已知节点列表，格式为 [(host, port), ...]
+known_node = None  # 已知节点，格式为 (host, port)
+
+# 标志变量，指示是否已经接受到连接
+connection_received = False
+connection_received_lock = threading.Lock()
 
 # 处理客户端连接
 def handle_client(client_socket, client_address):
@@ -85,6 +90,7 @@ def handle_client(client_socket, client_address):
 
 # 监听连接
 def start_listening():
+    global connection_received
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     host = '0.0.0.0'
     server_socket.bind((host, node_port))
@@ -94,20 +100,49 @@ def start_listening():
     try:
         while True:
             client_socket, client_address = server_socket.accept()
-            print("There is already a connection, stop inputting")
+            with connection_received_lock:
+                connection_received = True
+            print("已接受到连接，停止输入对方节点信息")
             print(f"Accepted connection from: {client_address[0]}:{client_address[1]}")
             client_thread = threading.Thread(target=handle_client, args=(client_socket, client_address))
             client_thread.start()
+            break  # 只处理一个连接
     finally:
         server_socket.close()
 
-# 连接到其他节点
-def connect_to_nodes():
-    for host, port in known_nodes:
+# 输入对方节点信息
+def input_known_node():
+    global connection_received, known_node
+    print("请输入对方的节点地址 (或输入 'exit' 退出): ", end="")
+    sys.stdout.flush()
+    while not connection_received:
+        input_ready, _, _ = select.select([sys.stdin], [], [], 0.1)  # 每0.1秒检查一次
+        if input_ready:
+            host = sys.stdin.readline().strip()
+            if host.lower() == "exit":
+                break
+            sys.stdout.flush()
+            port_str = input("请输入对方的节点端口: ")
+            try:
+                port = int(port_str)
+                known_node = (host, port)
+                break
+            except ValueError:
+                print("请输入有效的端口号")
+                print("请输入对方的节点地址 (或输入 'exit' 退出): ", end="")
+                sys.stdout.flush()
+        with connection_received_lock:
+            if connection_received:
+                print("请输入要发送的消息: ", end="")
+                break
+
+# 连接到已知节点
+def connect_to_node():
+    if known_node:
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        defines.connect_to_server(host, port, client_socket)
+        defines.connect_to_server(known_node[0], known_node[1], client_socket)
         if client_socket:
-            client_thread = threading.Thread(target=handle_client, args=(client_socket, (host, port)))
+            client_thread = threading.Thread(target=handle_client, args=(client_socket, known_node))
             client_thread.start()
 
 # 主函数
@@ -115,7 +150,13 @@ if __name__ == "__main__":
     # 启动监听线程
     listening_thread = threading.Thread(target=start_listening)
     listening_thread.start()
-    # 添加已知节点（示例）
-    known_nodes.append((input("请输入对方的节点地址:"), int(input("请输入对方的节点端口:"))))  # 假设这是另一个节点的地址
+
+    # 启动输入线程
+    input_thread = threading.Thread(target=input_known_node)
+    input_thread.start()
+
+    # 等待输入线程完成
+    input_thread.join()
+
     # 连接到已知节点
-    connect_to_nodes()
+    connect_to_node()
