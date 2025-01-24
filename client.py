@@ -37,7 +37,7 @@ client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 defines.connect_to_server(Server_Host, Server_Port, client_socket)
 
 
-def start_send():
+def start_send():  
     while True:
         message = input("请输入要发送的消息: ")
         print()
