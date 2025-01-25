@@ -6,7 +6,7 @@ import socket
 def decrypt_text_with_gpg_privatekey(encrypted_text, secring_file_path, passphrase=None):
     gpg_home = os.path.expanduser(os.environ.get('GNUPGHOME', '~/.gnupg'))
     if not os.path.exists(gpg_home):
-        raise FileNotFoundError(f"GPG home directory {gpg_home} does not exist.")
+        raise FileNotFoundError(f"GPG home directory {gpg_home} doesNotExist.")
 
     gpg = gnupg.GPG(gnupghome=gpg_home)
 
@@ -86,12 +86,8 @@ def connect_to_server(host, port, client_socket_obj):
         # send_message_to_connected_socket(client_socket_obj, welcome_message)
     except (socket.error, ConnectionRefusedError) as e:
         print(f"Failed to connect to the server: {e}")
-        return None
+        return e
 
 
-def send_message_to_connected_socket(socket_obj, message):
-    try:
-        socket_obj.sendall(message.encode('utf-8'))
-        print("Message sent successfully.")
-    except socket.error as e:
-        print(f"Error occurred while sending data: {e}")
+
+

@@ -4,8 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7175764c-0f9b-464c-b96e-279d8c327e00" name="Changes" comment="feat(main): 实现端对端通信（不完美版）">
+    <list default="true" id="7175764c-0f9b-464c-b96e-279d8c327e00" name="Changes" comment="feat(main): 实现端对端通信（虽然仍然不完美但是只能做到这样了版）">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/defines.py" beforeDir="false" afterPath="$PROJECT_DIR$/defines.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -76,7 +77,7 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="main" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+    <configuration name="main" type="PythonConfigurationType" factoryName="Python" singleton="false" nameIsGenerated="true">
       <module name="DChat" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -92,7 +93,7 @@
       <option name="SCRIPT_NAME" value="$PROJECT_DIR$/main.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="EMULATE_TERMINAL" value="true" />
       <option name="MODULE_MODE" value="false" />
       <option name="REDIRECT_INPUT" value="false" />
       <option name="INPUT_FILE" value="" />
@@ -120,6 +121,11 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
+    <list>
+      <item itemvalue="Python.main" />
+      <item itemvalue="Python.client" />
+      <item itemvalue="Python.server" />
+    </list>
     <recent_temporary>
       <list>
         <item itemvalue="Python.client" />
@@ -151,11 +157,20 @@
       <option name="project" value="LOCAL" />
       <updated>1737724008555</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="feat(main): 实现端对端通信（虽然仍然不完美但是只能做到这样了版）">
+      <option name="closed" value="true" />
+      <created>1737726475969</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1737726475969</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="feat(main): 实现端对端通信（不完美版）" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat(main): 实现端对端通信（不完美版）" />
+    <MESSAGE value="feat(main): 实现端对端通信（虽然仍然不完美但是只能做到这样了版）" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(main): 实现端对端通信（虽然仍然不完美但是只能做到这样了版）" />
   </component>
 </project>
