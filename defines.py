@@ -1,11 +1,12 @@
 import gnupg
 import os
 import socket
-
+from loguru import logger
 
 def decrypt_text_with_gpg_privatekey(encrypted_text, secring_file_path, passphrase=None):
     gpg_home = os.path.expanduser(os.environ.get('GNUPGHOME', '~/.gnupg'))
     if not os.path.exists(gpg_home):
+        logger.error("GPG home directory doesNotExist.")
         raise FileNotFoundError(f"GPG home directory {gpg_home} doesNotExist.")
 
     gpg = gnupg.GPG(gnupghome=gpg_home)
@@ -14,6 +15,7 @@ def decrypt_text_with_gpg_privatekey(encrypted_text, secring_file_path, passphra
         with open(secring_file_path, 'rb') as key_file:
             import_result = gpg.import_keys(key_file.read())
             if not import_result.counts:
+                logger.error("Failed to import private key.")
                 raise ValueError("Failed to import private key.")
 
     try:
@@ -21,8 +23,10 @@ def decrypt_text_with_gpg_privatekey(encrypted_text, secring_file_path, passphra
         if decrypted_data.ok:
             return decrypted_data.data.decode('utf-8')
         else:
+            logger.error(f"Decryption failed: {decrypted_data.status}")
             raise Exception(f"Decryption failed: {decrypted_data.status}")
     except Exception as e:
+        logger.error(f"Error occurred during decryption: {e}")
         print(f"Error occurred during decryption: {e}")
         return None
 
@@ -35,14 +39,17 @@ def encrypt_text_with_gpg_pubkey(text, pubkey_file_path):
             pub_key_data = f.read()
         imported_keys = gpg.import_keys(pub_key_data)
         if not imported_keys.counts:
+            logger.error(f"Failed to import public key from file: {pubkey_file_path}")
             raise Exception(f"Failed to import public key from file: {pubkey_file_path}")
 
         key_id = imported_keys.fingerprints[0]
         encrypted_data = gpg.encrypt(text, key_id, always_trust=True)
         if not encrypted_data.ok:
+            logger.error(f"Encryption failed: {encrypted_data.status}, {encrypted_data.stderr}")
             raise Exception(f"Encryption failed: {encrypted_data.status}, {encrypted_data.stderr}")
         return str(encrypted_data)
     else:
+        logger.error(f"Public key file not found: {pubkey_file_path}")
         raise FileNotFoundError(f"Public key file not found: {pubkey_file_path}")
 
 
@@ -59,6 +66,7 @@ def generate_gpg_keypair(gpg_home, key_type='RSA', key_length=2048, name_email='
     )
     key = gpg.gen_key(input_data)
     if not key:
+        logger.error("Key generation failed.")
         raise Exception("Key generation failed.")
 
     public_key = gpg.export_keys(key.fingerprint)
@@ -72,7 +80,7 @@ def generate_gpg_keypair(gpg_home, key_type='RSA', key_length=2048, name_email='
 
     with open(private_key_path, 'w') as private_key_file:
         private_key_file.write(private_key)
-
+    logger.info("密钥对已生成并保存到 {gpg_home}")
     print(f"密钥对已生成并保存到 {gpg_home}")
     return public_key_path, private_key_path
 
@@ -80,12 +88,12 @@ def generate_gpg_keypair(gpg_home, key_type='RSA', key_length=2048, name_email='
 def connect_to_server(host, port, client_socket_obj):
     try:
         client_socket_obj.connect((host, port))
-        print(f"Connected to server at {host}:{port}")
+        logger.info(f"Connected to server at {host}:{port}")
         # 发送初始消息（可选）
         # welcome_message = "Hello Server!"
         # send_message_to_connected_socket(client_socket_obj, welcome_message)
     except (socket.error, ConnectionRefusedError) as e:
-        print(f"Failed to connect to the server: {e}")
+        logger.error(f"Failed to connect to the server: {e}")
         return e
 
 
