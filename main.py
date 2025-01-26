@@ -211,7 +211,6 @@ class ChatApp:
 
         dialog.result = None
         dialog.wait_window()
-
         return dialog.result
 
     def load_keys(self):
@@ -271,6 +270,7 @@ class ChatApp:
             t.start()
 
         logger.success(f"Finished handling connection from: {client_address[0]}:{client_address[1]}")
+        self.send_button.config(state=tk.NORMAL)
 
     def start_listening_thread(self):
         if self.local_port is not None:
