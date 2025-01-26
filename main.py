@@ -4,12 +4,16 @@ import threading
 import gnupg
 import defines
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from loguru import logger
+from ttkbootstrap import Style
 
 
 class ChatApp:
-    def __init__(self, root):
+    def __init__(self, tk_root):
+        self.public_key_label = None
+        self.init_submit_button = None
+        self.send_button = None
         logger.add(os.path.expanduser("./DChat.log"))
         self.passphrase = None
         self.message_entry = None
@@ -20,16 +24,16 @@ class ChatApp:
         self.port_entry = None
         self.local_port_entry = None
         self.passphrase_entry = None
-        self.root = root
+        self.root = tk_root
         self.client_socket = None
         self.gpg_home = os.path.expanduser(os.environ.get('GNUPGHOME', '~/.gnupg'))
         self.gpg_private_key_path = os.path.join(self.gpg_home, 'private_key.asc')
-        self.gpg_public_key_path = os.path.join(self.gpg_home, 'public_key.asc')
+        self.gpg_public_key_path = os.path.join(self.gpg_home, 'public_key.asc')  # 默认公钥路径
+        self.selected_public_key_path = None  # 用户选择的公钥路径
         self.gpg = gnupg.GPG(gnupghome=self.gpg_home)
         self.connected = False  # 连接状态变量
         self.local_port = None  # 初始化 local_port
         self.address_family = socket.AF_INET  # 默认使用IPv4
-
         self.check_ipv6_support()
         self.create_widgets()
         self.load_keys()
@@ -68,9 +72,15 @@ class ChatApp:
         self.local_port_entry = ttk.Entry(left_frame)
         self.local_port_entry.pack(pady=5)
 
+        # 选择 GPG 公钥文件
+        ttk.Label(left_frame, text="选择 GPG 公钥文件:").pack(pady=5)
+        self.public_key_label = ttk.Label(left_frame, text="未选择")
+        self.public_key_label.pack(pady=5)
+        ttk.Button(left_frame, text="选择公钥文件", command=self.select_public_key_file).pack(pady=5)
+
         # 初始化确定按钮
-        self.initsubmitbutton = ttk.Button(left_frame, text="确定", command=self.init_local_node)
-        self.initsubmitbutton.pack(pady=10)
+        self.init_submit_button = ttk.Button(left_frame, text="确定", command=self.init_local_node)
+        self.init_submit_button.pack(pady=10)
 
         # 左边布局：连接节点
         ttk.Label(left_frame, text="连接节点").pack(pady=10)
@@ -86,7 +96,7 @@ class ChatApp:
         self.port_entry.pack(pady=5)
 
         # 确定按钮
-        self.submit_button = ttk.Button(left_frame, text="连接", command=self.submit_entries)
+        self.submit_button = ttk.Button(left_frame, text="连接", command=self.submit_entries, state=tk.DISABLED)
         self.submit_button.pack(pady=10)
 
         # 状态标签
@@ -102,8 +112,17 @@ class ChatApp:
 
         self.message_entry = ttk.Entry(right_frame)
         self.message_entry.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
-        send_button = ttk.Button(right_frame, text="发送", command=self.send_message)
-        send_button.pack(side=tk.BOTTOM, fill=tk.X, padx=10)
+        self.send_button = ttk.Button(right_frame, text="发送", command=self.send_message, state=tk.DISABLED)
+        self.send_button.pack(side=tk.BOTTOM, fill=tk.X, padx=10)
+
+    def select_public_key_file(self):
+        file_path = filedialog.askopenfilename(
+            title="选择 GPG 公钥文件",
+            filetypes=[("ASCII Armor Files", "*.asc"), ("All Files", "*.*")]
+        )
+        if file_path:
+            self.selected_public_key_path = file_path
+            self.public_key_label.config(text=f"已选择: {os.path.basename(file_path)}")
 
     def send_message_to_connected_socket(self, message):
         try:
@@ -119,6 +138,9 @@ class ChatApp:
         if not self.passphrase or not local_port:
             self.status_label.config(text="请填写私钥密码和本地节点端口")
             return
+        if not self.selected_public_key_path:
+            self.status_label.config(text="请选择公钥文件")
+            return
 
         try:
             local_port = int(local_port)
@@ -131,6 +153,11 @@ class ChatApp:
 
         # 启动监听线程
         self.start_listening_thread()
+
+        # 启用连接按钮
+        self.submit_button.config(state=tk.NORMAL)
+
+        self.status_label.config(text="初始化本地节点成功")
 
     def submit_entries(self):
         host = self.host_entry.get().strip()
@@ -148,6 +175,8 @@ class ChatApp:
                     client_thread.start()
                     self.connected = True
                     self.submit_button.config(state=tk.DISABLED)  # 连接成功后禁用提交按钮
+                    self.send_button.config(state=tk.NORMAL)
+                    self.status_label.config(text="连接成功")
             except ValueError:
                 self.status_label.config(text="请输入有效的节点端口号")
             except Exception as e:
@@ -155,13 +184,53 @@ class ChatApp:
         else:
             self.status_label.config(text="本地节点已启动，等待连接")
 
+    def get_user_input(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("生成密钥对")
+        dialog.geometry("300x200")
+
+        ttk.Label(dialog, text="邮箱地址:").pack(pady=5)
+        email_entry = ttk.Entry(dialog)
+        email_entry.pack(pady=5)
+
+        ttk.Label(dialog, text="私钥密码:").pack(pady=5)
+        passphrase_entry = ttk.Entry(dialog, show="*")
+        passphrase_entry.pack(pady=5)
+
+        def on_submit():
+            email = email_entry.get().strip()
+            passphrase = passphrase_entry.get().strip()
+            if email and passphrase:
+                dialog.result = (email, passphrase)
+                dialog.destroy()
+            else:
+                messagebox.showwarning("警告", "请填写所有必要的信息。")
+
+        submit_button = ttk.Button(dialog, text="提交", command=on_submit)
+        submit_button.pack(pady=10)
+
+        dialog.result = None
+        dialog.wait_window()
+
+        return dialog.result
+
     def load_keys(self):
         if not os.path.exists(self.gpg_private_key_path) or not os.path.exists(self.gpg_public_key_path):
             logger.warning("密钥对未找到。正在生成新的密钥对...")
-            name_email = input("请输入你的邮箱: ")
-            self.gpg_public_key_path, self.gpg_private_key_path = defines.generate_gpg_keypair(self.gpg_home,
-                                                                                               name_email=name_email,
-                                                                                               passphrase=self.passphrase)
+            result = self.get_user_input()
+            if result:
+                name_email, passphrase = result
+                logger.debug(f"正在使用名称和邮箱地址生成密钥对: {name_email}")
+                keypair_paths = defines.generate_gpg_keypair(
+                    self.gpg_home,
+                    name_email=name_email,
+                    passphrase=passphrase
+                )
+                self.gpg_public_key_path, self.gpg_private_key_path = keypair_paths
+            else:
+                messagebox.showerror("错误", "未提供必要的信息，无法生成密钥对。")
+                logger.error("未提供必要的信息，无法生成密钥对。")
+                return
         else:
             logger.info("密钥对已存在。")
 
@@ -236,7 +305,8 @@ class ChatApp:
         if reply.lower() == "exit":
             self.root.quit()
         elif reply and self.client_socket:  # 检查是否有非空内容和有效的 client_socket
-            encrypted_message = defines.encrypt_text_with_gpg_pubkey(reply, self.gpg_public_key_path)
+            public_key_path = self.selected_public_key_path or self.gpg_public_key_path
+            encrypted_message = defines.encrypt_text_with_gpg_pubkey(reply, public_key_path)
             self.send_message_to_connected_socket(encrypted_message)
             self.chat_text.insert(tk.END, f"Sent: {reply}\n")
             logger.trace(f"Sent: {reply}")
@@ -245,7 +315,7 @@ class ChatApp:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    root = Style(theme="minty").master
     root.title("DChat P2P")
     root.geometry("800x600")
     app = ChatApp(root)

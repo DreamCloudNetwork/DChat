@@ -53,36 +53,31 @@ def encrypt_text_with_gpg_pubkey(text, pubkey_file_path):
         raise FileNotFoundError(f"Public key file not found: {pubkey_file_path}")
 
 
-def generate_gpg_keypair(gpg_home, key_type='RSA', key_length=2048, name_email='user@example.com', passphrase=None):
-    if not os.path.exists(gpg_home):
-        os.makedirs(gpg_home)
 
+def generate_gpg_keypair(gpg_home, name_email, passphrase):
     gpg = gnupg.GPG(gnupghome=gpg_home)
+
+    # 生成密钥对
     input_data = gpg.gen_key_input(
-        key_type=key_type,
-        key_length=key_length,
         name_email=name_email,
         passphrase=passphrase
     )
     key = gpg.gen_key(input_data)
-    if not key:
-        logger.error("Key generation failed.")
-        raise Exception("Key generation failed.")
 
+    # 导出公钥
     public_key = gpg.export_keys(key.fingerprint)
-    private_key = gpg.export_keys(key.fingerprint, secret=True)
-
     public_key_path = os.path.join(gpg_home, 'public_key.asc')
+    with open(public_key_path, 'wb') as public_key_file:
+        public_key_file.write(public_key.encode('utf-8'))
+
+    # 导出私钥
+    private_key = gpg.export_keys(key.fingerprint, secret=True, passphrase=passphrase)
     private_key_path = os.path.join(gpg_home, 'private_key.asc')
+    with open(private_key_path, 'wb') as private_key_file:
+        private_key_file.write(private_key.encode('utf-8'))
 
-    with open(public_key_path, 'w') as public_key_file:
-        public_key_file.write(public_key)
-
-    with open(private_key_path, 'w') as private_key_file:
-        private_key_file.write(private_key)
-    logger.info("密钥对已生成并保存到 {gpg_home}")
-    print(f"密钥对已生成并保存到 {gpg_home}")
     return public_key_path, private_key_path
+
 
 
 def connect_to_server(host, port, client_socket_obj):
