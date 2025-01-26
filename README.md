@@ -16,9 +16,7 @@ DChat 是一个基于Python的点对点（P2P）聊天应用程序，使用GPG�
 ### 前提条件
 
 - Python 3.6 或更高版本
-- `gnupg` 库
 - `tkinter` 库（通常随Python安装）
-- `loguru` 库
 
 ### 安装步骤
 
@@ -68,7 +66,7 @@ python main.py
 
 ## 依赖项
 
-- `gnupg`：用于生成和管理GPG密钥对，以及加密和解密消息。
+- `python-gnupg`：用于生成和管理GPG密钥对，以及加密和解密消息。
 - `tkinter`：用于创建图形用户界面。
 - `loguru`：用于日志记录。
 
