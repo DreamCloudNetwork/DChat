@@ -22,7 +22,7 @@ DChat 是一个基于Python的点对点（P2P）聊天应用程序，使用GPG�
 
 1. **克隆仓库**
     ```bash 
-    git clone https://github.com/yourusername/DChat.git 
+    git clone https://github.com/DreamCloudNetwork/DChat.git 
     cd DChat
    ```
 2. **创建虚拟环境（可选但推荐）**
