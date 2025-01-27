@@ -271,6 +271,7 @@ class ChatApp:
 
         logger.success(f"Finished handling connection from: {client_address[0]}:{client_address[1]}")
         self.send_button.config(state=tk.NORMAL)
+        self.submit_button.config(state=tk.DISABLED)
 
     def start_listening_thread(self):
         if self.local_port is not None:
