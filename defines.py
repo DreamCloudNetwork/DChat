@@ -3,6 +3,7 @@ import os
 import socket
 from loguru import logger
 
+
 def decrypt_text_with_gpg_privatekey(encrypted_text, secring_file_path, passphrase=None):
     gpg_home = os.path.expanduser(os.environ.get('GNUPGHOME', '~/.gnupg'))
     if not os.path.exists(gpg_home):
@@ -43,7 +44,7 @@ def encrypt_text_with_gpg_pubkey(text, pubkey_file_path):
             raise Exception(f"Failed to import public key from file: {pubkey_file_path}")
 
         key_id = imported_keys.fingerprints[0]
-        encrypted_data = gpg.encrypt(text, key_id, always_trust=True)
+        encrypted_data = gpg.encrypt(text, key_id)
         if not encrypted_data.ok:
             logger.error(f"Encryption failed: {encrypted_data.status}, {encrypted_data.stderr}")
             raise Exception(f"Encryption failed: {encrypted_data.status}, {encrypted_data.stderr}")
@@ -51,7 +52,6 @@ def encrypt_text_with_gpg_pubkey(text, pubkey_file_path):
     else:
         logger.error(f"Public key file not found: {pubkey_file_path}")
         raise FileNotFoundError(f"Public key file not found: {pubkey_file_path}")
-
 
 
 def generate_gpg_keypair(gpg_home, name_email, passphrase):
@@ -79,7 +79,6 @@ def generate_gpg_keypair(gpg_home, name_email, passphrase):
     return public_key_path, private_key_path
 
 
-
 def connect_to_server(host, port, client_socket_obj):
     try:
         client_socket_obj.connect((host, port))
@@ -90,7 +89,3 @@ def connect_to_server(host, port, client_socket_obj):
     except (socket.error, ConnectionRefusedError) as e:
         logger.error(f"Failed to connect to the server: {e}")
         return e
-
-
-
-

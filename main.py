@@ -2,8 +2,10 @@ import os
 import socket
 import threading
 import gnupg
-import defines
 import tkinter as tk
+import sys
+import defines
+import json
 from tkinter import ttk, messagebox, filedialog
 from loguru import logger
 from ttkbootstrap import Style
@@ -11,10 +13,11 @@ from ttkbootstrap import Style
 
 class ChatApp:
     def __init__(self, tk_root):
+        self.listening_thread = None
+        self.stop_event = threading.Event()  # 添加停止事件
         self.public_key_label = None
         self.init_submit_button = None
         self.send_button = None
-        logger.add(os.path.expanduser("./DChat.log"))
         self.passphrase = None
         self.message_entry = None
         self.chat_text = None
@@ -35,6 +38,30 @@ class ChatApp:
         self.local_port = None  # 初始化 local_port
         self.address_family = socket.AF_INET  # 默认使用IPv4
         self.check_ipv6_support()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.config_file_path = os.path.join(os.path.dirname(__file__), "config.json")
+        logger.add(os.path.expanduser(os.path.join(os.path.dirname(__file__), "DChat.log")))
+        logger.info("DChat 启动")
+        self.config_file = None
+        try:
+            self.config_file = open(self.config_file_path, "r+")
+            self.config_data = json.load(self.config_file)
+            self.local_port = int(self.config_data.get("local_port", 0))
+            if self.local_port == 0:
+                self.local_port = 8847
+        except FileNotFoundError:
+            logger.info("config.json 不存在，创建文件")
+            self.config_file = open(self.config_file_path, "w+")
+            json.dump({"local_port": 8847}, self.config_file)
+            self.config_file.seek(0)  # 移动到文件开头
+            self.config_data = json.load(self.config_file)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error loading config.json: {e}")
+            logger.info("config.json 格式错误，重置文件")
+            self.config_file = open(self.config_file_path, "w+")
+            json.dump({"local_port": 8847}, self.config_file)
+            self.config_file.seek(0)  # 移动到文件开头
+            self.config_data = json.load(self.config_file)
         self.create_widgets()
         self.load_keys()
 
@@ -70,13 +97,8 @@ class ChatApp:
         # 本地节点端口输入
         ttk.Label(left_frame, text="本地节点端口:").pack()
         self.local_port_entry = ttk.Entry(left_frame)
+        self.local_port_entry.insert(0, self.config_data.get("local_port", 8847))
         self.local_port_entry.pack(pady=5)
-
-        # 选择 GPG 公钥文件
-        ttk.Label(left_frame, text="选择 GPG 公钥文件:").pack(pady=5)
-        self.public_key_label = ttk.Label(left_frame, text="未选择")
-        self.public_key_label.pack(pady=5)
-        ttk.Button(left_frame, text="选择公钥文件", command=self.select_public_key_file).pack(pady=5)
 
         # 初始化确定按钮
         self.init_submit_button = ttk.Button(left_frame, text="确定", command=self.init_local_node)
@@ -138,18 +160,43 @@ class ChatApp:
         if not self.passphrase or not local_port:
             self.status_label.config(text="请填写私钥密码和本地节点端口")
             return
-        if not self.selected_public_key_path:
-            self.status_label.config(text="请选择公钥文件")
-            return
 
         try:
             local_port = int(local_port)
         except ValueError:
             self.status_label.config(text="请输入有效的本地节点端口号")
             return
+        if not 1024 <= local_port <= 65535:
+            self.status_label.config(text="请输入有效的本地节点端口号")
+            return
+
+        self.config_data["local_port"] = local_port
+        self.config_file.seek(0)  # 移动到文件开头
+        json.dump(self.config_data, self.config_file)
+        self.config_file.truncate()  # 删除多余的内容
 
         # 更新 local_port
         self.local_port = local_port
+
+        # 生成并保存公钥和私钥
+        if not os.path.exists(self.gpg_private_key_path) or not os.path.exists(self.gpg_public_key_path):
+            logger.warning("密钥对未找到。正在生成新的密钥对...")
+            result = self.get_user_input()
+            if result:
+                name_email, passphrase = result
+                logger.debug(f"正在使用名称和邮箱地址生成密钥对: {name_email}")
+                keypair_paths = defines.generate_gpg_keypair(
+                    self.gpg_home,
+                    name_email=name_email,
+                    passphrase=passphrase
+                )
+                self.gpg_public_key_path, self.gpg_private_key_path = keypair_paths
+            else:
+                messagebox.showerror("错误", "未提供必要的信息，无法生成密钥对。")
+                logger.error("未提供必要的信息，无法生成密钥对。")
+                return
+        else:
+            logger.info("密钥对已存在。")
 
         # 启动监听线程
         self.start_listening_thread()
@@ -169,14 +216,30 @@ class ChatApp:
                 port = int(port)
                 known_node = (host, port)
                 client_socket = socket.socket(self.address_family, socket.SOCK_STREAM)
-                if client_socket and not defines.connect_to_server(known_node[0], known_node[1], client_socket):
-                    self.client_socket = client_socket
-                    client_thread = threading.Thread(target=self.handle_client, args=(client_socket, known_node))
-                    client_thread.start()
-                    self.connected = True
-                    self.submit_button.config(state=tk.DISABLED)  # 连接成功后禁用提交按钮
-                    self.send_button.config(state=tk.NORMAL)
-                    self.status_label.config(text="连接成功")
+                client_socket.connect(known_node)
+                logger.info(f"Connected to server at {host}:{port}")
+
+                # 发送自己的公钥
+                with open(self.gpg_public_key_path, 'r') as f:
+                    public_key = f.read()
+                client_socket.send(public_key.encode('utf-8'))
+
+                # 接收对方的公钥
+                peer_public_key = client_socket.recv(4096).decode('utf-8')
+                peer_public_key_path = os.path.join(self.gpg_home, 'peer_public_key.asc')
+                with open(peer_public_key_path, 'w') as f:
+                    f.write(peer_public_key)
+
+                # 导入对方的公钥
+                self.gpg.import_keys(peer_public_key)
+
+                self.client_socket = client_socket
+                client_thread = threading.Thread(target=self.handle_client, args=(client_socket, known_node))
+                client_thread.start()
+                self.connected = True
+                self.submit_button.config(state=tk.DISABLED)  # 连接成功后禁用提交按钮
+                self.send_button.config(state=tk.NORMAL)
+                self.status_label.config(text="连接成功")
             except ValueError:
                 self.status_label.config(text="请输入有效的节点端口号")
             except Exception as e:
@@ -209,7 +272,7 @@ class ChatApp:
         submit_button = ttk.Button(dialog, text="提交", command=on_submit)
         submit_button.pack(pady=10)
 
-        dialog.result = None
+        dialog.result = "None"
         dialog.wait_window()
         return dialog.result
 
@@ -246,7 +309,21 @@ class ChatApp:
         def start_get():
             try:
                 with client_socket:
-                    while True:
+                    # 接收对方的公钥
+                    peer_public_key = client_socket.recv(4096).decode('utf-8')
+                    peer_public_key_path = os.path.join(self.gpg_home, 'peer_public_key.asc')
+                    with open(peer_public_key_path, 'w') as f:
+                        f.write(peer_public_key)
+
+                    # 导入对方的公钥
+                    self.gpg.import_keys(peer_public_key)
+
+                    # 发送自己的公钥
+                    with open(self.gpg_public_key_path, 'r') as f:
+                        public_key = f.read()
+                    client_socket.send(public_key.encode('utf-8'))
+
+                    while not self.stop_event.is_set():  # 使用 stop_event 控制线程
                         encrypted_data = client_socket.recv(1024).decode('utf-8')
                         if not encrypted_data:
                             logger.warning(f"Connection closed by {client_address[0]}:{client_address[1]}")
@@ -267,17 +344,12 @@ class ChatApp:
         threads.append(t1)
 
         for t in threads:
+            t.daemon = True
             t.start()
 
         logger.success(f"Finished handling connection from: {client_address[0]}:{client_address[1]}")
         self.send_button.config(state=tk.NORMAL)
         self.submit_button.config(state=tk.DISABLED)
-
-    def start_listening_thread(self):
-        if self.local_port is not None:
-            listening_thread = threading.Thread(target=self.start_listening, args=(self.local_port,))
-            listening_thread.daemon = True
-            listening_thread.start()
 
     def start_listening(self, local_port):
         server_socket = socket.socket(self.address_family, socket.SOCK_STREAM)
@@ -288,31 +360,64 @@ class ChatApp:
             logger.info(f"Node is listening on {host}:{local_port}...")
 
             try:
-                while True:
-                    client_socket, client_address = server_socket.accept()
-                    logger.trace("已接受到连接，停止输入对方节点信息")
-                    logger.trace(f"Accepted connection from: {client_address[0]}:{client_address[1]}")
-                    self.client_socket = client_socket
-                    client_thread = threading.Thread(target=self.handle_client, args=(client_socket, client_address))
-                    client_thread.start()
-                    break  # 只处理一个连接
+                while not self.stop_event.is_set():  # 使用 stop_event 控制线程
+                    server_socket.settimeout(1)  # 设置超时以响应 stop_event
+                    try:
+                        client_socket, client_address = server_socket.accept()
+                        logger.trace(f"Accepted connection from: {client_address[0]}:{client_address[1]}")
+                        client_thread = threading.Thread(target=self.handle_client,
+                                                         args=(client_socket, client_address))
+                        client_thread.start()
+                    except socket.timeout:
+                        continue  # 超时后继续循环
             finally:
                 server_socket.close()
         except Exception as e:
             self.status_label.config(text=f"监听失败: {e}")
+
+    def start_listening_thread(self):
+        if self.local_port is not None:
+            self.listening_thread = threading.Thread(target=self.start_listening, args=(self.local_port,))
+            self.listening_thread.daemon = True
+            self.listening_thread.start()
 
     def send_message(self):
         reply = self.message_entry.get().strip()
         if reply.lower() == "exit":
             self.root.quit()
         elif reply and self.client_socket:  # 检查是否有非空内容和有效的 client_socket
-            public_key_path = self.selected_public_key_path or self.gpg_public_key_path
-            encrypted_message = defines.encrypt_text_with_gpg_pubkey(reply, public_key_path)
+            peer_public_key_path = os.path.join(self.gpg_home, 'peer_public_key.asc')
+            encrypted_message = defines.encrypt_text_with_gpg_pubkey(reply, peer_public_key_path)
             self.send_message_to_connected_socket(encrypted_message)
             self.chat_text.insert(tk.END, f"Sent: {reply}\n")
             logger.trace(f"Sent: {reply}")
             self.chat_text.see(tk.END)
             self.message_entry.delete(0, tk.END)
+
+    def on_closing(self):
+        logger.info("Closing application...")
+
+        self.stop_event.set()  # 设置停止事件
+        if self.client_socket:
+            try:
+                self.client_socket.close()
+                logger.info("Client socket closed.")
+            except Exception as e:
+                logger.error(f"Error occurred while closing client socket: {e}")
+
+        if self.listening_thread and self.listening_thread.is_alive():
+            self.listening_thread.join(timeout=5)  # 等待线程结束，最多等待5秒
+            if self.listening_thread.is_alive():
+                logger.warning("Listening thread did not terminate within the timeout period.")
+                self.listening_thread.stop()
+
+        self.root.quit()  # 确保 Tkinter 主循环结束
+        self.root.destroy()
+        logger.info("Application closed.")
+        self.config_file.close()
+        logger.info("Config file closed.")
+
+        sys.exit(0)
 
 
 if __name__ == "__main__":
