@@ -13,6 +13,10 @@ from ttkbootstrap import Style
 
 class ChatApp:
     def __init__(self, tk_root):
+        self.ipv6_port_entry = None
+        self.ipv4_port_entry = None
+        self.listening_thread_ipv4 = None
+        self.listening_thread_ipv6 = None
         self.listening_thread = None
         self.stop_event = threading.Event()  # 添加停止事件
         self.public_key_label = None
@@ -25,7 +29,6 @@ class ChatApp:
         self.submit_button = None
         self.host_entry = None
         self.port_entry = None
-        self.local_port_entry = None
         self.passphrase_entry = None
         self.root = tk_root
         self.client_socket = None
@@ -35,9 +38,10 @@ class ChatApp:
         self.selected_public_key_path = None  # 用户选择的公钥路径
         self.gpg = gnupg.GPG(gnupghome=self.gpg_home)
         self.connected = False  # 连接状态变量
-        self.local_port = None  # 初始化 local_port
+        self.local_ipv4_port = None  # 初始化 local_ipv4_port
+        self.local_ipv6_port = None  # 初始化 local_ipv6_port
         self.address_family = socket.AF_INET  # 默认使用IPv4
-        self.check_ipv6_support()
+
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.config_file_path = os.path.join(os.path.dirname(__file__), "config.json")
         open('DChat.log', 'w').close()
@@ -49,20 +53,19 @@ class ChatApp:
         try:
             self.config_file = open(self.config_file_path, "r+")
             self.config_data = json.load(self.config_file)
-            self.local_port = int(self.config_data.get("local_port", 0))
-            if self.local_port == 0:
-                self.local_port = 8847
+            self.local_ipv4_port = int(self.config_data.get("local_ipv4_port", 8846))
+            self.local_ipv6_port = int(self.config_data.get("local_ipv6_port", 8847))
         except FileNotFoundError:
             logger.info("config.json 不存在，创建文件")
             self.config_file = open(self.config_file_path, "w+")
-            json.dump({"local_port": 8847, "debug": "False"}, self.config_file)
+            json.dump({"local_ipv4_port": 8846, "local_ipv6_port": 8847, "debug": "False"}, self.config_file)
             self.config_file.seek(0)  # 移动到文件开头
             self.config_data = json.load(self.config_file)
         except json.JSONDecodeError as e:
             logger.error(f"Error loading config.json: {e}")
             logger.info("config.json 格式错误，重置文件")
             self.config_file = open(self.config_file_path, "w+")
-            json.dump({"local_port": 8847, "debug": "False"}, self.config_file)
+            json.dump({"local_ipv4_port": 8846, "local_ipv6_port": 8847, "debug": "False"}, self.config_file)
             self.config_file.seek(0)  # 移动到文件开头
             self.config_data = json.load(self.config_file)
         self.contact_file_path = os.path.join(os.path.dirname(__file__), "fingerprints.json")
@@ -86,16 +89,6 @@ class ChatApp:
         self.create_widgets()
         self.load_keys()
 
-    def check_ipv6_support(self):
-        if socket.has_ipv6:
-            choice = messagebox.askyesno("选择协议", "您的系统支持IPv6，是否使用IPv6？")
-            if choice:
-                self.address_family = socket.AF_INET6
-            else:
-                self.address_family = socket.AF_INET
-        else:
-            self.address_family = socket.AF_INET
-
     def create_widgets(self):
         # 创建左右布局
         main_frame = ttk.Frame(self.root)
@@ -116,13 +109,19 @@ class ChatApp:
         self.passphrase_entry = ttk.Entry(left_frame, show="*")
         self.passphrase_entry.pack(pady=5)
 
-        # 本地节点端口输入
+        # IPv4 端口输入
         if self.config_data.get("debug") == "True":
-            ttk.Label(left_frame, text="本地节点端口:").pack()
-        self.local_port_entry = ttk.Entry(left_frame)
-        self.local_port_entry.insert(0, self.config_data.get("local_port", 8847))
+            ttk.Label(left_frame, text="本地 IPv4 端口:").pack()
+            self.ipv4_port_entry = ttk.Entry(left_frame)
+            self.ipv4_port_entry.insert(0, self.config_data.get("local_ipv4_port", 8846))
+            self.ipv4_port_entry.pack(pady=5)
+
+        # IPv6 端口输入
         if self.config_data.get("debug") == "True":
-            self.local_port_entry.pack(pady=5)
+            ttk.Label(left_frame, text="本地 IPv6 端口:").pack()
+            self.ipv6_port_entry = ttk.Entry(left_frame)
+            self.ipv6_port_entry.insert(0, self.config_data.get("local_ipv6_port", 8847))
+            self.ipv6_port_entry.pack(pady=5)
 
         # 初始化确定按钮
         self.init_submit_button = ttk.Button(left_frame, text="确定", command=self.init_local_node)
@@ -183,28 +182,41 @@ class ChatApp:
 
     def init_local_node(self):
         self.passphrase = self.passphrase_entry.get().strip()
-        local_port = self.local_port_entry.get().strip()
 
-        if not self.passphrase or not local_port:
-            self.status_label.config(text="请填写私钥密码和本地节点端口")
+        if not self.passphrase:
+            self.status_label.config(text="请填写私钥密码")
             return
 
-        try:
-            local_port = int(local_port)
-        except ValueError:
-            self.status_label.config(text="请输入有效的本地节点端口号")
-            return
-        if not 1024 <= local_port <= 65535:
-            self.status_label.config(text="请输入有效的本地节点端口号")
-            return
+        # 使用 debug 模式下的 IPv4 和 IPv6 端口
+        if self.config_data.get("debug") == "True":
+            ipv4_port = self.ipv4_port_entry.get().strip()
+            ipv6_port = self.ipv6_port_entry.get().strip()
 
-        self.config_data["local_port"] = local_port
-        self.config_file.seek(0)  # 移动到文件开头
-        json.dump(self.config_data, self.config_file)
-        self.config_file.truncate()  # 删除多余的内容
+            try:
+                ipv4_port = int(ipv4_port)
+                ipv6_port = int(ipv6_port)
+            except ValueError:
+                self.status_label.config(text="请输入有效的端口号")
+                return
 
-        # 更新 local_port
-        self.local_port = local_port
+            if not 1024 <= ipv4_port <= 65535 or not 1024 <= ipv6_port <= 65535:
+                self.status_label.config(text="请输入有效的端口号")
+                return
+
+            # 更新 config_data
+            self.config_data["local_ipv4_port"] = ipv4_port
+            self.config_data["local_ipv6_port"] = ipv6_port
+            self.config_file.seek(0)  # 移动到文件开头
+            json.dump(self.config_data, self.config_file)
+            self.config_file.truncate()  # 删除多余的内容
+
+        else:
+            ipv4_port = self.local_ipv4_port
+            ipv6_port = self.local_ipv6_port
+
+        # 更新 local_ipv4_port 和 local_ipv6_port
+        self.local_ipv4_port = ipv4_port
+        self.local_ipv6_port = ipv6_port
 
         # 生成并保存公钥和私钥
         if not os.path.exists(self.gpg_private_key_path) or not os.path.exists(self.gpg_public_key_path):
@@ -227,7 +239,7 @@ class ChatApp:
             logger.info("密钥对已存在。")
 
         # 启动监听线程
-        self.start_listening_thread()
+        self.start_listening_thread(ipv4_port, ipv6_port)
 
         # 启用连接按钮
         self.submit_button.config(state=tk.NORMAL)
@@ -236,95 +248,107 @@ class ChatApp:
 
     def submit_entries(self):
         host = self.host_entry.get().strip()
-        port = self.port_entry.get().strip()
+        port_str = self.port_entry.get().strip()
 
-        # 连接到已知节点（如果提供了节点地址和端口）
-        if host and port:
-            try:
-                port = int(port)
-                known_node = (host, port)
-                client_socket = socket.socket(self.address_family, socket.SOCK_STREAM)
-                client_socket.connect(known_node)
-                logger.info(f"Connected to server at {host}:{port}")
+        # 确定要连接的端口
+        try:
+            addr_info = socket.getaddrinfo(host, None)
+            if any(family == socket.AF_INET6 for family, _, _, _, _ in addr_info):
 
-                # 发送自己的公钥
-                with open(self.gpg_public_key_path, 'r') as f:
-                    public_key = f.read()
-                client_socket.send(public_key.encode('utf-8'))
+                self.address_family = socket.AF_INET6
+            else:
 
-                # 接收对方的公钥
-                peer_public_key = client_socket.recv(4096).decode('utf-8')
-                peer_public_key_path = os.path.join(self.gpg_home, 'peer_public_key.asc')
-                with open(peer_public_key_path, 'w') as f:
-                    f.write(peer_public_key)
+                self.address_family = socket.AF_INET
 
-                # 导入对方的公钥
-                import_result = self.gpg.import_keys(peer_public_key)
-                if import_result.fingerprints:
-                    peer_fingerprint = import_result.fingerprints[0]
-                    logger.success(f"导入对方公钥成功，指纹: {peer_fingerprint}")
-                    self.chat_text.insert(tk.END, f"对方公钥导入成功，指纹: {peer_fingerprint}\n")
-                else:
-                    logger.error("导入对方公钥失败")
-                    self.status_label.config(text="导入对方公钥失败")
-                    client_socket.close()
-                    return
+            # 连接到已知节点（如果提供了节点地址和端口）
+            if host and port_str:
+                try:
+                    port = int(port_str)
+                    known_node = (host, port)
+                    client_socket = socket.socket(self.address_family, socket.SOCK_STREAM)
+                    client_socket.connect(known_node)
+                    logger.info(f"Connected to server at {host}:{port}")
 
-                # 获取并输出自己的公钥指纹
-                with open(self.gpg_public_key_path, 'r') as f:
-                    own_public_key = f.read()
-                import_result_own = self.gpg.import_keys(own_public_key)
-                if import_result_own.fingerprints:
-                    own_fingerprint = import_result_own.fingerprints[0]
-                    logger.success(f"自己的公钥指纹: {own_fingerprint}")
-                    self.chat_text.insert(tk.END, f"自己的公钥指纹: {own_fingerprint}\n")
-                else:
-                    logger.error("获取自己的公钥指纹失败")
-                    self.status_label.config(text="获取自己的公钥指纹失败")
-                    client_socket.close()
-                    return
+                    # 发送自己的公钥
+                    with open(self.gpg_public_key_path, 'r') as f:
+                        public_key = f.read()
+                    client_socket.send(public_key.encode('utf-8'))
 
-                # 检查 fingerprints.json 中是否已有该节点的公钥指纹
-                if host in self.contact_data:
-                    stored_fingerprint = self.contact_data[host]
-                    if stored_fingerprint != peer_fingerprint:
-                        logger.error(
-                            f"公钥指纹不匹配。存储的指纹: {stored_fingerprint}, 接收到的指纹: {peer_fingerprint}")
-                        self.status_label.config(text="公钥指纹不匹配")
+                    # 接收对方的公钥
+                    peer_public_key = client_socket.recv(4096).decode('utf-8')
+                    peer_public_key_path = os.path.join(self.gpg_home, 'peer_public_key.asc')
+                    with open(peer_public_key_path, 'w') as f:
+                        f.write(peer_public_key)
+
+                    # 导入对方的公钥
+                    import_result = self.gpg.import_keys(peer_public_key)
+                    if import_result.fingerprints:
+                        peer_fingerprint = import_result.fingerprints[0]
+                        logger.success(f"导入对方公钥成功，指纹: {peer_fingerprint}")
+                        self.chat_text.insert(tk.END, f"对方公钥导入成功，指纹: {peer_fingerprint}\n")
+                    else:
+                        logger.error("导入对方公钥失败")
+                        self.status_label.config(text="导入对方公钥失败")
                         client_socket.close()
                         return
+
+                    # 获取并输出自己的公钥指纹
+                    with open(self.gpg_public_key_path, 'r') as f:
+                        own_public_key = f.read()
+                    import_result_own = self.gpg.import_keys(own_public_key)
+                    if import_result_own.fingerprints:
+                        own_fingerprint = import_result_own.fingerprints[0]
+                        logger.success(f"自己的公钥指纹: {own_fingerprint}")
+                        self.chat_text.insert(tk.END, f"自己的公钥指纹: {own_fingerprint}\n")
                     else:
-                        logger.info("公钥指纹匹配")
-                        self.chat_text.insert(tk.END, "公钥指纹匹配\n")
-                else:
-                    # 用户确认公钥指纹
-                    if not self.confirm_fingerprint(host, peer_fingerprint):
-                        logger.error("用户拒绝确认公钥指纹")
-                        self.status_label.config(text="用户拒绝确认公钥指纹")
+                        logger.error("获取自己的公钥指纹失败")
+                        self.status_label.config(text="获取自己的公钥指纹失败")
                         client_socket.close()
                         return
-                    else:
-                        # 存储公钥指纹到 fingerprints.json
-                        self.contact_data[host] = peer_fingerprint
-                        self.contact_file.seek(0)
-                        json.dump(self.contact_data, self.contact_file)
-                        self.contact_file.truncate()
-                        logger.info(f"公钥指纹已存储: {peer_fingerprint}")
-                        self.chat_text.insert(tk.END, "公钥指纹已存储\n")
 
-                self.client_socket = client_socket
-                client_thread = threading.Thread(target=self.handle_client, args=(client_socket, known_node))
-                client_thread.start()
-                self.connected = True
-                self.submit_button.config(state=tk.DISABLED)  # 连接成功后禁用提交按钮
-                self.send_button.config(state=tk.NORMAL)
-                self.status_label.config(text="连接成功")
-            except ValueError:
-                self.status_label.config(text="请输入有效的节点端口号")
-            except Exception as e:
-                self.status_label.config(text=f"连接失败: {e}")
-        else:
-            self.status_label.config(text="本地节点已启动，等待连接")
+                    # 检查 fingerprints.json 中是否已有该节点的公钥指纹
+                    if host in self.contact_data:
+                        stored_fingerprint = self.contact_data[host]
+                        if stored_fingerprint != peer_fingerprint:
+                            logger.error(
+                                f"公钥指纹不匹配。存储的指纹: {stored_fingerprint}, 接收到的指纹: {peer_fingerprint}")
+                            self.status_label.config(text="公钥指纹不匹配")
+                            client_socket.close()
+                            return
+                        else:
+                            logger.info("公钥指纹匹配")
+                            self.chat_text.insert(tk.END, "公钥指纹匹配\n")
+                    else:
+                        # 用户确认公钥指纹
+                        if not self.confirm_fingerprint(host, peer_fingerprint):
+                            logger.error("用户拒绝确认公钥指纹")
+                            self.status_label.config(text="用户拒绝确认公钥指纹")
+                            client_socket.close()
+                            return
+                        else:
+                            # 存储公钥指纹到 fingerprints.json
+                            self.contact_data[host] = peer_fingerprint
+                            self.contact_file.seek(0)
+                            json.dump(self.contact_data, self.contact_file)
+                            self.contact_file.truncate()
+                            logger.info(f"公钥指纹已存储: {peer_fingerprint}")
+                            self.chat_text.insert(tk.END, "公钥指纹已存储\n")
+
+                    self.client_socket = client_socket
+                    client_thread = threading.Thread(target=self.handle_client, args=(client_socket, known_node))
+                    client_thread.start()
+                    self.connected = True
+                    self.submit_button.config(state=tk.DISABLED)  # 连接成功后禁用提交按钮
+                    self.send_button.config(state=tk.NORMAL)
+                    self.status_label.config(text="连接成功")
+                except ValueError:
+                    self.status_label.config(text="请输入有效的节点端口号")
+                except Exception as e:
+                    self.status_label.config(text=f"连接失败: {e}")
+            else:
+                self.status_label.config(text="本地节点已启动，等待连接")
+        except Exception as e:
+            self.status_label.config(text=f"连接失败: {e}")
 
     def confirm_fingerprint(self, host, peer_fingerprint):
         dialog = tk.Toplevel(self.root)
@@ -510,9 +534,9 @@ class ChatApp:
         self.send_button.config(state=tk.NORMAL)
         self.submit_button.config(state=tk.DISABLED)
 
-    def start_listening(self, local_port):
-        server_socket = socket.socket(self.address_family, socket.SOCK_STREAM)
-        host = '::' if self.address_family == socket.AF_INET6 else '0.0.0.0'
+    def start_listening(self, local_port, address_family):
+        server_socket = socket.socket(address_family, socket.SOCK_STREAM)
+        host = '::' if address_family == socket.AF_INET6 else '0.0.0.0'
         try:
             server_socket.bind((host, local_port))
             server_socket.listen(5)
@@ -533,12 +557,19 @@ class ChatApp:
                 server_socket.close()
         except Exception as e:
             self.status_label.config(text=f"监听失败: {e}")
+            logger.error(f"监听失败: {e}")
 
-    def start_listening_thread(self):
-        if self.local_port is not None:
-            self.listening_thread = threading.Thread(target=self.start_listening, args=(self.local_port,))
-            self.listening_thread.daemon = True
-            self.listening_thread.start()
+    def start_listening_thread(self, ipv4_port, ipv6_port):
+        if self.local_ipv4_port is not None:
+            self.listening_thread_ipv4 = threading.Thread(target=self.start_listening, args=(ipv4_port, socket.AF_INET))
+            self.listening_thread_ipv4.daemon = True
+            self.listening_thread_ipv4.start()
+
+        if self.local_ipv6_port is not None:
+            self.listening_thread_ipv6 = threading.Thread(target=self.start_listening,
+                                                          args=(ipv6_port, socket.AF_INET6))
+            self.listening_thread_ipv6.daemon = True
+            self.listening_thread_ipv6.start()
 
     def send_message(self):
         reply = self.message_entry.get().strip()
@@ -556,7 +587,8 @@ class ChatApp:
     def on_closing(self):
         logger.info("Closing application...")
 
-        self.stop_event.set()  # 设置停止事件
+        self.stop_event.set()  # 设置停止事件以通知所有监听线程停止
+
         if self.client_socket:
             try:
                 self.client_socket.close()
@@ -564,19 +596,20 @@ class ChatApp:
             except Exception as e:
                 logger.error(f"Error occurred while closing client socket: {e}")
 
-        if self.listening_thread and self.listening_thread.is_alive():
-            self.listening_thread.join(timeout=5)  # 等待线程结束，最多等待5秒
-            if self.listening_thread.is_alive():
-                logger.warning("Listening thread did not terminate within the timeout period.")
-                self.listening_thread.stop()
+        # 等待监听线程结束
+        if hasattr(self,
+                   'listening_thread_ipv4') and self.listening_thread_ipv4 is not None and self.listening_thread_ipv4.is_alive():
+            self.listening_thread_ipv4.join(timeout=5)  # 等待线程结束，最多等待5秒
+            if self.listening_thread_ipv4.is_alive():
+                logger.warning("IPv4 listening thread did not terminate within the timeout period.")
 
-        self.root.quit()  # 确保 Tkinter 主循环结束
-        self.root.destroy()
-        logger.info("Application closed.")
-        self.config_file.close()
-        logger.info("Config file closed.")
+        if hasattr(self,
+                   'listening_thread_ipv6') and self.listening_thread_ipv6 is not None and self.listening_thread_ipv6.is_alive():
+            self.listening_thread_ipv6.join(timeout=5)  # 等待线程结束，最多等待5秒
+            if self.listening_thread_ipv6.is_alive():
+                logger.warning("IPv6 listening thread did not terminate within the timeout period.")
 
-        sys.exit(0)
+        self.root.quit()  # 确保 Tkinter 主循环
 
 
 if __name__ == "__main__":
