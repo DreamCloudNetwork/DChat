@@ -40,7 +40,10 @@ class ChatApp:
         self.check_ipv6_support()
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.config_file_path = os.path.join(os.path.dirname(__file__), "config.json")
+        open('DChat.log', 'w').close()
+        logger.remove(0)
         logger.add(os.path.expanduser(os.path.join(os.path.dirname(__file__), "DChat.log")))
+        logger.add(sys.stderr, level="TRACE")
         logger.info("DChat 启动")
         self.config_file = None
         try:
@@ -52,16 +55,34 @@ class ChatApp:
         except FileNotFoundError:
             logger.info("config.json 不存在，创建文件")
             self.config_file = open(self.config_file_path, "w+")
-            json.dump({"local_port": 8847}, self.config_file)
+            json.dump({"local_port": 8847, "debug": "False"}, self.config_file)
             self.config_file.seek(0)  # 移动到文件开头
             self.config_data = json.load(self.config_file)
         except json.JSONDecodeError as e:
             logger.error(f"Error loading config.json: {e}")
             logger.info("config.json 格式错误，重置文件")
             self.config_file = open(self.config_file_path, "w+")
-            json.dump({"local_port": 8847}, self.config_file)
+            json.dump({"local_port": 8847, "debug": "False"}, self.config_file)
             self.config_file.seek(0)  # 移动到文件开头
             self.config_data = json.load(self.config_file)
+        self.contact_file_path = os.path.join(os.path.dirname(__file__), "fingerprints.json")
+        try:
+            self.contact_file = open(self.contact_file_path, "r+")
+            self.contact_data = json.load(self.contact_file)
+        except FileNotFoundError:
+            logger.info("fingerprints.json 不存在，创建文件")
+            self.contact_file = open(self.contact_file_path, "w+")
+            json.dump({}, self.contact_file)
+            self.contact_file.seek(0)  # 移动到文件开头
+            self.contact_data = json.load(self.contact_file)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error loading fingerprints.json: {e}")
+            logger.info("fingerprints.json 格式错误，重置文件")
+            self.contact_file = open(self.contact_file_path, "w+")
+            json.dump({}, self.contact_file)
+            self.contact_file.seek(0)  # 移动到文件开头
+            self.contact_data = json.load(self.contact_file)
+
         self.create_widgets()
         self.load_keys()
 
@@ -87,7 +108,8 @@ class ChatApp:
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         # 左边布局：初始化本地节点
-        ttk.Label(left_frame, text="初始化本地节点").pack(pady=10)
+        if self.config_data.get("debug") == "True":
+            ttk.Label(left_frame, text="初始化本地节点").pack(pady=10)
 
         # 左边布局：私钥密码输入
         ttk.Label(left_frame, text="私钥密码:").pack()
@@ -95,17 +117,20 @@ class ChatApp:
         self.passphrase_entry.pack(pady=5)
 
         # 本地节点端口输入
-        ttk.Label(left_frame, text="本地节点端口:").pack()
+        if self.config_data.get("debug") == "True":
+            ttk.Label(left_frame, text="本地节点端口:").pack()
         self.local_port_entry = ttk.Entry(left_frame)
         self.local_port_entry.insert(0, self.config_data.get("local_port", 8847))
-        self.local_port_entry.pack(pady=5)
+        if self.config_data.get("debug") == "True":
+            self.local_port_entry.pack(pady=5)
 
         # 初始化确定按钮
         self.init_submit_button = ttk.Button(left_frame, text="确定", command=self.init_local_node)
         self.init_submit_button.pack(pady=10)
 
         # 左边布局：连接节点
-        ttk.Label(left_frame, text="连接节点").pack(pady=10)
+        if self.config_data.get("debug") == "True":
+            ttk.Label(left_frame, text="连接节点").pack(pady=10)
 
         # 节点地址输入
         ttk.Label(left_frame, text="节点地址:").pack()
@@ -113,9 +138,12 @@ class ChatApp:
         self.host_entry.pack(pady=5)
 
         # 节点端口输入
-        ttk.Label(left_frame, text="节点端口:").pack()
+        if self.config_data.get("debug") == "True":
+            ttk.Label(left_frame, text="节点端口:").pack()
         self.port_entry = ttk.Entry(left_frame)
-        self.port_entry.pack(pady=5)
+        self.port_entry.insert(0, "8847")
+        if self.config_data.get("debug") == "True":
+            self.port_entry.pack(pady=5)
 
         # 确定按钮
         self.submit_button = ttk.Button(left_frame, text="连接", command=self.submit_entries, state=tk.DISABLED)
@@ -231,7 +259,58 @@ class ChatApp:
                     f.write(peer_public_key)
 
                 # 导入对方的公钥
-                self.gpg.import_keys(peer_public_key)
+                import_result = self.gpg.import_keys(peer_public_key)
+                if import_result.fingerprints:
+                    peer_fingerprint = import_result.fingerprints[0]
+                    logger.success(f"导入对方公钥成功，指纹: {peer_fingerprint}")
+                    self.chat_text.insert(tk.END, f"对方公钥导入成功，指纹: {peer_fingerprint}\n")
+                else:
+                    logger.error("导入对方公钥失败")
+                    self.status_label.config(text="导入对方公钥失败")
+                    client_socket.close()
+                    return
+
+                # 获取并输出自己的公钥指纹
+                with open(self.gpg_public_key_path, 'r') as f:
+                    own_public_key = f.read()
+                import_result_own = self.gpg.import_keys(own_public_key)
+                if import_result_own.fingerprints:
+                    own_fingerprint = import_result_own.fingerprints[0]
+                    logger.success(f"自己的公钥指纹: {own_fingerprint}")
+                    self.chat_text.insert(tk.END, f"自己的公钥指纹: {own_fingerprint}\n")
+                else:
+                    logger.error("获取自己的公钥指纹失败")
+                    self.status_label.config(text="获取自己的公钥指纹失败")
+                    client_socket.close()
+                    return
+
+                # 检查 fingerprints.json 中是否已有该节点的公钥指纹
+                if host in self.contact_data:
+                    stored_fingerprint = self.contact_data[host]
+                    if stored_fingerprint != peer_fingerprint:
+                        logger.error(
+                            f"公钥指纹不匹配。存储的指纹: {stored_fingerprint}, 接收到的指纹: {peer_fingerprint}")
+                        self.status_label.config(text="公钥指纹不匹配")
+                        client_socket.close()
+                        return
+                    else:
+                        logger.info("公钥指纹匹配")
+                        self.chat_text.insert(tk.END, "公钥指纹匹配\n")
+                else:
+                    # 用户确认公钥指纹
+                    if not self.confirm_fingerprint(host, peer_fingerprint):
+                        logger.error("用户拒绝确认公钥指纹")
+                        self.status_label.config(text="用户拒绝确认公钥指纹")
+                        client_socket.close()
+                        return
+                    else:
+                        # 存储公钥指纹到 fingerprints.json
+                        self.contact_data[host] = peer_fingerprint
+                        self.contact_file.seek(0)
+                        json.dump(self.contact_data, self.contact_file)
+                        self.contact_file.truncate()
+                        logger.info(f"公钥指纹已存储: {peer_fingerprint}")
+                        self.chat_text.insert(tk.END, "公钥指纹已存储\n")
 
                 self.client_socket = client_socket
                 client_thread = threading.Thread(target=self.handle_client, args=(client_socket, known_node))
@@ -246,6 +325,42 @@ class ChatApp:
                 self.status_label.config(text=f"连接失败: {e}")
         else:
             self.status_label.config(text="本地节点已启动，等待连接")
+
+    def confirm_fingerprint(self, host, peer_fingerprint):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("确认公钥指纹")
+        dialog.geometry("400x250")
+
+        ttk.Label(dialog, text=f"节点地址: {host}").pack(pady=5)
+        ttk.Label(dialog, text=f"对方公钥指纹: {peer_fingerprint}").pack(pady=5)
+
+        # 获取并显示自己的公钥指纹
+        with open(self.gpg_public_key_path, 'r') as f:
+            own_public_key = f.read()
+        import_result_own = self.gpg.import_keys(own_public_key)
+        if import_result_own.fingerprints:
+            own_fingerprint = import_result_own.fingerprints[0]
+            ttk.Label(dialog, text=f"自己的公钥指纹: {own_fingerprint}").pack(pady=5)
+        else:
+            logger.error("获取自己的公钥指纹失败")
+            ttk.Label(dialog, text="获取自己的公钥指纹失败").pack(pady=5)
+
+        def on_confirm():
+            dialog.result = True
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.result = False
+            dialog.destroy()
+
+        confirm_button = ttk.Button(dialog, text="确认", command=on_confirm)
+        cancel_button = ttk.Button(dialog, text="取消", command=on_cancel)
+        confirm_button.pack(pady=10)
+        cancel_button.pack(pady=10)
+
+        dialog.result = False
+        dialog.wait_window()
+        return dialog.result
 
     def get_user_input(self):
         dialog = tk.Toplevel(self.root)
@@ -315,14 +430,58 @@ class ChatApp:
                     with open(peer_public_key_path, 'w') as f:
                         f.write(peer_public_key)
 
-                    # 导入对方的公钥
-                    self.gpg.import_keys(peer_public_key)
-
                     # 发送自己的公钥
                     with open(self.gpg_public_key_path, 'r') as f:
                         public_key = f.read()
                     client_socket.send(public_key.encode('utf-8'))
-
+                    # 导入对方的公钥
+                    import_result = self.gpg.import_keys(peer_public_key)
+                    if import_result.fingerprints:
+                        peer_fingerprint = import_result.fingerprints[0]
+                        logger.success(f"导入对方公钥成功，指纹: {peer_fingerprint}")
+                        self.chat_text.insert(tk.END, f"对方公钥导入成功，指纹: {peer_fingerprint}\n")
+                    else:
+                        logger.error("导入对方公钥失败")
+                        self.chat_text.insert(tk.END, "导入对方公钥失败\n")
+                        return
+                    # 获取并输出自己的公钥指纹
+                    with open(self.gpg_public_key_path, 'r') as f:
+                        own_public_key = f.read()
+                    import_result_own = self.gpg.import_keys(own_public_key)
+                    if import_result_own.fingerprints:
+                        own_fingerprint = import_result_own.fingerprints[0]
+                        logger.success(f"自己的公钥指纹: {own_fingerprint}")
+                        self.chat_text.insert(tk.END, f"自己的公钥指纹: {own_fingerprint}\n")
+                    else:
+                        logger.error("获取自己的公钥指纹失败")
+                        self.chat_text.insert(tk.END, "获取自己的公钥指纹失败\n")
+                        return
+                    # 检查 fingerprints.json 中是否已有该节点的公钥指纹
+                    host = client_address[0]
+                    if host in self.contact_data:
+                        stored_fingerprint = self.contact_data[host]
+                        if stored_fingerprint != peer_fingerprint:
+                            logger.error(
+                                f"公钥指纹不匹配。存储的指纹: {stored_fingerprint}, 接收到的指纹: {peer_fingerprint}")
+                            self.chat_text.insert(tk.END, "公钥指纹不匹配\n")
+                            return
+                        else:
+                            logger.info("公钥指纹匹配")
+                            self.chat_text.insert(tk.END, "公钥指纹匹配\n")
+                    else:
+                        # 用户确认公钥指纹
+                        if not self.confirm_fingerprint(host, peer_fingerprint):
+                            logger.error("用户拒绝确认公钥指纹")
+                            self.chat_text.insert(tk.END, "用户拒绝确认公钥指纹\n")
+                            return
+                        else:
+                            # 存储公钥指纹到 fingerprints.json
+                            self.contact_data[host] = peer_fingerprint
+                            self.contact_file.seek(0)
+                            json.dump(self.contact_data, self.contact_file)
+                            self.contact_file.truncate()
+                            logger.info(f"公钥指纹已存储: {peer_fingerprint}")
+                            self.chat_text.insert(tk.END, "公钥指纹已存储\n")
                     while not self.stop_event.is_set():  # 使用 stop_event 控制线程
                         encrypted_data = client_socket.recv(1024).decode('utf-8')
                         if not encrypted_data:
@@ -425,4 +584,7 @@ if __name__ == "__main__":
     root.title("DChat P2P")
     root.geometry("800x600")
     app = ChatApp(root)
-    root.mainloop()
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        app.on_closing()
